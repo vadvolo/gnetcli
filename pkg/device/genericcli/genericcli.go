@@ -71,6 +71,7 @@ type GenericCLI struct {
 	sftpEnabled      bool
 	defaultAnswers   []cmd.Answer
 	terminalParams   *terminalParams
+	writeDelay       time.Duration
 	connectTimeout   time.Duration
 }
 
@@ -196,6 +197,17 @@ func WithWriteNewLine(newline []byte) GenericCLIOption {
 	}
 }
 
+// WithWriteDelay throttles command writing by feeding input to the connector
+// with the given per-byte delay. Some devices (notably RouterOS' interactive
+// line editor) drop the session when a whole command line arrives at once.
+// The connector must implement SetWriteDelay(time.Duration) for this to take
+// effect; otherwise it is ignored.
+func WithWriteDelay(d time.Duration) GenericCLIOption {
+	return func(h *GenericCLI) {
+		h.writeDelay = d
+	}
+}
+
 func WithConnectTimeout(connectTimeout time.Duration) GenericCLIOption {
 	return func(h *GenericCLI) {
 		h.connectTimeout = connectTimeout
@@ -283,6 +295,12 @@ func (m *GenericDevice) Connect(ctx context.Context) (err error) {
 		if v, ok := m.connector.(SetTerminalSize); ok {
 			v.SetTerminalSize(m.cli.terminalParams.w, m.cli.terminalParams.h)
 			v.SetTerminalEcho(m.cli.terminalParams.echo)
+		}
+	}
+
+	if m.cli.writeDelay > 0 {
+		if v, ok := m.connector.(interface{ SetWriteDelay(time.Duration) }); ok {
+			v.SetWriteDelay(m.cli.writeDelay)
 		}
 	}
 

@@ -146,6 +146,7 @@ type Streamer struct {
 	programData            string
 	env                    map[string]string
 	terminalParams         terminalParams
+	writeDelay             time.Duration
 	tunnel                 Tunnel
 	credentialsInterceptor func(credentials.Credentials) credentials.Credentials
 	session                *sshSession
@@ -191,6 +192,13 @@ func (m *Streamer) SetTerminalSize(w, h int) {
 
 func (m *Streamer) SetTerminalEcho(e bool) {
 	m.terminalParams.echo = e
+}
+
+// SetWriteDelay enables throttled, byte-by-byte writing with the given delay
+// between bytes. Used for devices whose interactive line editor drops the
+// session when a whole command line arrives at once (e.g. RouterOS).
+func (m *Streamer) SetWriteDelay(d time.Duration) {
+	m.writeDelay = d
 }
 
 func NewStreamer(host string, credentials credentials.Credentials, opts ...StreamerOption) *Streamer {
@@ -242,9 +250,25 @@ func (m *Streamer) Write(text []byte) error {
 	if m.trace != nil {
 		m.trace(trace.Write, text)
 	}
-	written, err := m.session.stdin.Write(text)
-	if err != nil {
-		return err
+	written := 0
+	if m.writeDelay > 0 && len(text) > 1 {
+		// Some devices (notably RouterOS' interactive line editor) drop the
+		// session if a whole command line arrives at once; feed it byte-by-byte
+		// with a small delay so the editor keeps up.
+		for i := range text {
+			n, werr := m.session.stdin.Write(text[i : i+1])
+			if werr != nil {
+				return werr
+			}
+			written += n
+			time.Sleep(m.writeDelay)
+		}
+	} else {
+		n, werr := m.session.stdin.Write(text)
+		if werr != nil {
+			return werr
+		}
+		written = n
 	}
 	m.logger.Debug("write", zap.ByteString("text", text), zap.Int("written", written))
 	return nil
@@ -260,14 +284,21 @@ func chanReader(ctx context.Context, reader io.Reader, stdoutBuffer chan []byte,
 	for {
 		readBuffer := make([]byte, defaultReadSize)
 		readLen, err := reader.Read(readBuffer)
+		if readLen > 0 {
+			// Read may return data together with an error (notably io.EOF when the
+			// peer closes the channel right after its last write, as RouterOS does
+			// after a finished traceroute/ping). Deliver the bytes before acting on
+			// the error, otherwise the final chunk (e.g. the prompt) is dropped and
+			// the command is reported as generic_error.
+			logger.Debug("read", zap.ByteString("data", readBuffer[:readLen]))
+			tmpBuffer <- readBuffer[:readLen]
+		}
 		if err != nil {
 			// flush
 			close(tmpBuffer)
 			_ = wg.Wait()
 			return err
 		}
-		logger.Debug("read", zap.ByteString("data", readBuffer[:readLen]))
-		tmpBuffer <- readBuffer[:readLen]
 	}
 }
 
