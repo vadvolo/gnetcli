@@ -738,10 +738,27 @@ func GenericExecute(command cmd.Cmd, connector streamer.Connector, cli GenericCL
 			logger.Debug("QuestionHandler question", zap.ByteString("question", question))
 			answer, err := command.QuestionHandler(question, repeatedQuestionCount)
 			if err != nil {
-				if errors.Is(err, cmd.ErrNotFoundAnswer) {
+				if !errors.Is(err, cmd.ErrNotFoundAnswer) {
+					return nil, fmt.Errorf("QuestionHandler error %w", err)
+				}
+				// The command itself has no answer for this question; fall back to
+				// the device-level default answers (WithAnswers). Devices that set
+				// none keep the previous behaviour (throw a QuestionException).
+				found := false
+				for _, cmdAnswer := range cli.defaultAnswers {
+					ans, ok, aerr := cmdAnswer.Match(question)
+					if aerr != nil {
+						return nil, aerr
+					}
+					if ok {
+						answer = ans
+						found = true
+						break
+					}
+				}
+				if !found {
 					return nil, device.ThrowQuestionException(question)
 				}
-				return nil, fmt.Errorf("QuestionHandler error %w", err)
 			}
 			logger.Debug("QuestionHandler answer", zap.ByteString("answer", answer))
 			err = connector.Write(answer)
