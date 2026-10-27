@@ -3,6 +3,7 @@ package devconf
 import (
 	"fmt"
 	"github.com/annetutil/gnetcli/pkg/device/asa"
+	"github.com/annetutil/gnetcli/pkg/device/fsos"
 	"os"
 	"regexp"
 	"strings"
@@ -216,19 +217,28 @@ func InitDeviceMapping(logger *zap.Logger, deviceFilePath string) (map[string]fu
 
 func InitDefaultDeviceMapping(logger *zap.Logger) map[string]func(streamer.Connector) device.Device {
 	deviceMaps := map[string]func(streamer.Connector) device.Device{
-		"juniper": GenericCLIWrapper(juniper.NewDevice, logger),
-		"huawei":  GenericCLIWrapper(huawei.NewDevice, logger),
-		"h3c":     GenericCLIWrapper(h3c.NewDevice, logger),
-		"arista":  GenericCLIWrapper(arista.NewDevice, logger),
-		"cisco":   GenericCLIWrapper(cisco.NewDevice, logger),
-		"nxos":    GenericCLIWrapper(nxos.NewDevice, logger),
-		"bcomos":  GenericCLIWrapper(bcomos.NewDevice, logger),
-		"pc":      pc.NewDevice,
-		"ros":     GenericCLIWrapper(ros.NewDevice, logger),
-		"netconf": netconf.BindDeviceOpts(netconf.NewDevice, netconf.WithLogger(logger)),
-		"aruos":   GenericCLIWrapper(aruos.NewDevice, logger),
-		"eltex":   GenericCLIWrapper(eltex.NewDevice, logger),
-		"asa":     GenericCLIWrapper(asa.NewDevice, logger),
+		"juniper":  GenericCLIWrapper(juniper.NewDevice, logger),
+		"huawei":   GenericCLIWrapper(huawei.NewDevice, logger),
+		"smartax":  GenericCLIWrapper(huawei.NewSmartAXDevice, logger),
+		"h3c":      GenericCLIWrapper(h3c.NewDevice, logger),
+		"arista":   GenericCLIWrapper(arista.NewDevice, logger),
+		"cisco":    GenericCLIWrapper(cisco.NewDevice, logger),
+		"cisco_xr": GenericCLIWrapper(cisco.NewXRDevice, logger),
+		"nxos":     GenericCLIWrapper(nxos.NewDevice, logger),
+		"bcomos":   GenericCLIWrapper(bcomos.NewDevice, logger),
+		"pc":       pc.NewDevice,
+		"ubiquiti": pc.NewDevice,
+		"airos":    pc.NewDevice,
+		"tplink":   pc.NewDevice,
+		"cambium":  pc.NewDevice,
+		"ros":      GenericCLIWrapper(ros.NewDevice, logger),
+		"ros_slow": GenericCLIWrapper(ros.NewSlowDevice, logger),
+		"ros_noecho": GenericCLIWrapper(ros.NewNoEchoDevice, logger),
+		"netconf":  netconf.BindDeviceOpts(netconf.NewDevice, netconf.WithLogger(logger)),
+		"aruos":    GenericCLIWrapper(aruos.NewDevice, logger),
+		"eltex":    GenericCLIWrapper(eltex.NewDevice, logger),
+		"asa":      GenericCLIWrapper(asa.NewDevice, logger),
+		"fsos":     GenericCLIWrapper(fsos.NewDevice, logger),
 	}
 	return deviceMaps
 }
