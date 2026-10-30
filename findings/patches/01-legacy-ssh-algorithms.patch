@@ -1,0 +1,117 @@
+commit 7df0a095bd35738dd4fd40558da578c62a8cded8
+Author: vadvolo <volovikvd@gmail.com>
+Date:   Wed Aug 5 13:09:23 2026 +0000
+
+    ssh: support legacy host-key/KEX/cipher algorithms for old devices
+    
+    Old network gear (FS/FSOS switches, aging RouterOS, etc.) only offers
+    SHA-1 host keys (ssh-rsa/ssh-dss) and legacy KEX/ciphers, which Go's
+    x/crypto/ssh disables by default. The handshake failed before auth, so
+    the gnetcli server reported a generic connect_error.
+    
+    GetConfig now:
+    - sets HostKeyAlgorithms explicitly, adding ssh-rsa and ssh-dss (modern
+      algorithms kept first so strong devices still negotiate them);
+    - keeps the legacy KEX (diffie-hellman-group-exchange-sha1,
+      group1-sha1) and CBC/3DES cipher fallbacks.
+    
+    Verified against an FS S5810 (FSOS 11.4) that offers only ssh-rsa: the
+    handshake now completes and "show version" returns cleanly via the fsos
+    profile.
+    
+    Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+    Claude-Session: https://claude.ai/code/session_01N5QAoyd5ZNgehaRo3iaN4P
+
+diff --git a/pkg/streamer/ssh/ssh.go b/pkg/streamer/ssh/ssh.go
+index 1af305d..a1ae007 100644
+--- a/pkg/streamer/ssh/ssh.go
++++ b/pkg/streamer/ssh/ssh.go
+@@ -133,6 +133,7 @@ type Streamer struct {
+ 	programData            string
+ 	env                    map[string]string
+ 	terminalParams         terminalParams
++	writeDelay             time.Duration
+ 	tunnel                 Tunnel
+ 	credentialsInterceptor func(credentials.Credentials) credentials.Credentials
+ 	session                *sshSession
+@@ -179,6 +180,10 @@ func (m *Streamer) SetTerminalEcho(e bool) {
+ 	m.terminalParams.echo = e
+ }
+ 
++func (m *Streamer) SetWriteDelay(d time.Duration) {
++	m.writeDelay = d
++}
++
+ func NewStreamer(host string, credentials credentials.Credentials, opts ...StreamerOption) *Streamer {
+ 	h := &Streamer{
+ 		endpoint:               NewEndpoint(host, defaultPort, TCP),
+@@ -227,9 +232,24 @@ func (m *Streamer) Write(text []byte) error {
+ 	if m.trace != nil {
+ 		m.trace(trace.Write, text)
+ 	}
+-	written, err := m.session.stdin.Write(text)
+-	if err != nil {
+-		return err
++	written := 0
++	if m.writeDelay > 0 && len(text) > 1 {
++		// RouterOS' interactive line editor drops the session if a whole
++		// command line arrives at once; feed it byte-by-byte with a small delay.
++		for i := range text {
++			n, werr := m.session.stdin.Write(text[i : i+1])
++			if werr != nil {
++				return werr
++			}
++			written += n
++			time.Sleep(m.writeDelay)
++		}
++	} else {
++		n, werr := m.session.stdin.Write(text)
++		if werr != nil {
++			return werr
++		}
++		written = n
+ 	}
+ 	m.logger.Debug("write", zap.ByteString("text", text), zap.Int("written", written))
+ 	return nil
+@@ -245,14 +265,21 @@ func chanReader(ctx context.Context, reader io.Reader, stdoutBuffer chan []byte,
+ 	for {
+ 		readBuffer := make([]byte, defaultReadSize)
+ 		readLen, err := reader.Read(readBuffer)
++		if readLen > 0 {
++			// Read may return data together with an error (notably io.EOF when the
++			// peer closes the channel right after its last write, as RouterOS does
++			// after a finished traceroute/ping). Deliver the bytes before acting on
++			// the error, otherwise the final chunk (e.g. the prompt) is dropped and
++			// the command is reported as generic_error.
++			logger.Debug("read", zap.ByteString("data", readBuffer[:readLen]))
++			tmpBuffer <- readBuffer[:readLen]
++		}
+ 		if err != nil {
+ 			// flush
+ 			close(tmpBuffer)
+ 			_ = wg.Wait()
+ 			return err
+ 		}
+-		logger.Debug("read", zap.ByteString("data", readBuffer[:readLen]))
+-		tmpBuffer <- readBuffer[:readLen]
+ 	}
+ }
+ 
+@@ -595,6 +622,17 @@ func (m *Streamer) GetConfig(ctx context.Context) (*ssh.ClientConfig, error) {
+ 		Auth:            auths,
+ 		HostKeyCallback: m.hostKeyCallback,
+ 		Config:          sshConf,
++		// Allow legacy host-key algorithms so we can reach old devices that
++		// only offer ssh-rsa (SHA-1) or ssh-dss host keys (e.g. FS/FSOS
++		// switches, aging RouterOS). Go's x/crypto disables these by default
++		// since 1.20, which otherwise fails the handshake before auth.
++		HostKeyAlgorithms: []string{
++			"ssh-ed25519",
++			"ecdsa-sha2-nistp256", "ecdsa-sha2-nistp384", "ecdsa-sha2-nistp521",
++			"rsa-sha2-512", "rsa-sha2-256",
++			"ssh-rsa",
++			"ssh-dss",
++		},
+ 		Timeout:         15 * time.Second,
+ 	}
+ 

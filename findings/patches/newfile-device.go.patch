@@ -1,0 +1,65 @@
+# NEW FILE: pkg/device/fsos/device.go
+
+diff --git a/pkg/device/fsos/device.go b/pkg/device/fsos/device.go
+new file mode 100644
+index 0000000..6e23036
+--- /dev/null
++++ b/pkg/device/fsos/device.go
+@@ -0,0 +1,57 @@
++/*
++Package fsos implements a gnetcli CLI device for FS.com switches running FSOS
++(e.g. S5810 series, FSOS 11.x).
++
++FSOS presents an IOS-like CLI (prompt ">" for user mode, "#" for enable, error
++markers like "% Invalid input detected at '^' marker.") but does NOT support the
++usual terminal/init commands: `terminal no monitor`, `terminal length 0`,
++`terminal page-break disable` all return "% Unknown command." Sending them (as a
++Cisco/Eltex profile does) breaks the session -> EOF -> generic_error.
++
++Therefore this profile:
++  - sends NO auto/init commands,
++  - reads from user mode (`show version` works without `enable`; enable requires a
++    separate secret and is not needed for read-only collection),
++  - matches the prompt even when the device identity carries a custom prefix with
++    ':' (e.g. "Access:FS_BG_W060-Banjica>"),
++  - tolerates FSOS command echo which is terminated by "\r\r\n" (extra CR),
++  - handles the pager reactively (--More--), since no pager-disable command exists.
++*/
++package fsos
++
++import (
++	"fmt"
++	"regexp"
++
++	"github.com/annetutil/gnetcli/pkg/cmd"
++	"github.com/annetutil/gnetcli/pkg/device/genericcli"
++	"github.com/annetutil/gnetcli/pkg/expr"
++	"github.com/annetutil/gnetcli/pkg/streamer"
++)
++
++const (
++	// User ">" / enable "#". Hostname/identity may include word chars, '-', '.',
++	// '/', ':' (e.g. "Access:FS_BG_W060-Banjica>").
++	promptExpression = `(\r\n|\n|\r|^)[\w\-.:/]+[>#]\s*$`
++	// FSOS error markers.
++	errorExpression = `(\r|\n|^)(% Unknown command\.|% Invalid input detected at '\^' marker\.|% Ambiguous command:.*|% Incomplete command\.|% Unrecognized host or address.*|% Access denied)`
++	// FSOS pager (no pager-disable command exists, answer reactively with space).
++	pagerExpression = `\r?\n? *--More-- *$`
++)
++
++// echoExpr matches the echoed command. FSOS echoes "<cmd>\r\r\n", so allow any
++// number of CRs before the newline (default gnetcli echo expr only allows \r\n|\n).
++func echoExpr(c cmd.Cmd) expr.Expr {
++	return expr.NewSimpleExpr().FromPattern(fmt.Sprintf(`%s\r*\n`, regexp.QuoteMeta(string(c.Value()))))
++}
++
++// NewDevice creates a gnetcli device for FS.com FSOS switches.
++func NewDevice(connector streamer.Connector, opts ...genericcli.GenericDeviceOption) genericcli.GenericDevice {
++	cli := genericcli.MakeGenericCLI(
++		expr.NewSimpleExprLast200().FromPattern(promptExpression),
++		expr.NewSimpleExprLast200().FromPattern(errorExpression),
++		genericcli.WithPager(expr.NewSimpleExprLast200().FromPattern(pagerExpression)),
++		genericcli.WithEchoExprFn(echoExpr),
++	)
++	return genericcli.MakeGenericDevice(cli, connector, opts...)
++}

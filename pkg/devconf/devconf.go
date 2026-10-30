@@ -31,9 +31,10 @@ import (
 )
 
 const (
-	FeatureAutocmds        = "autocmds"
-	FeatureSpacesAfterEcho = "spaces_after_echo"
-	FeatureExtraCrEcho     = "extra_cr_echo"
+	FeatureAutocmds                  = "autocmds"
+	FeatureSpacesAfterEcho           = "spaces_after_echo"
+	FeatureExtraCrEcho               = "extra_cr_echo"
+	FeatureANSIEscSeqEchoInterleaved = "ansi_esc_seq_echo_interleaved"
 )
 
 type DevConf struct {
@@ -115,6 +116,23 @@ func (m DevConf) Make() (*genericcli.GenericCLI, error) {
 			case FeatureExtraCrEcho:
 				a := genericcli.WithEchoExprFn(func(c cmd.Cmd) expr.Expr {
 					return expr.NewSimpleExpr().FromPattern(fmt.Sprintf(`%s\r*\n`, regexp.QuoteMeta(string(c.Value()))))
+				})
+				opts = append(opts, a)
+			case FeatureANSIEscSeqEchoInterleaved:
+				// CPE CLIs like Cambium ePMP echo each typed character wrapped in
+				// ANSI control sequences (and an occasional BEL), e.g.
+				// "s\x1b[Jh\x1b[Jo...". Tolerate ANSI/BEL interleaved between every
+				// character of the command echo.
+				a := genericcli.WithEchoExprFn(func(c cmd.Cmd) expr.Expr {
+					ansi := `(?:\x1b\[[\x30-\x3f]*[\x20-\x2f]*[\x40-\x7e]|\x07)*`
+					var b strings.Builder
+					for _, ch := range string(c.Value()) {
+						b.WriteString(ansi)
+						b.WriteString(regexp.QuoteMeta(string(ch)))
+					}
+					b.WriteString(ansi)
+					b.WriteString(`\r?\n?`)
+					return expr.NewSimpleExpr().FromPattern(b.String())
 				})
 				opts = append(opts, a)
 			default:
@@ -217,28 +235,28 @@ func InitDeviceMapping(logger *zap.Logger, deviceFilePath string) (map[string]fu
 
 func InitDefaultDeviceMapping(logger *zap.Logger) map[string]func(streamer.Connector) device.Device {
 	deviceMaps := map[string]func(streamer.Connector) device.Device{
-		"juniper":  GenericCLIWrapper(juniper.NewDevice, logger),
-		"huawei":   GenericCLIWrapper(huawei.NewDevice, logger),
-		"smartax":  GenericCLIWrapper(huawei.NewSmartAXDevice, logger),
-		"h3c":      GenericCLIWrapper(h3c.NewDevice, logger),
-		"arista":   GenericCLIWrapper(arista.NewDevice, logger),
-		"cisco":    GenericCLIWrapper(cisco.NewDevice, logger),
-		"cisco_xr": GenericCLIWrapper(cisco.NewXRDevice, logger),
-		"nxos":     GenericCLIWrapper(nxos.NewDevice, logger),
-		"bcomos":   GenericCLIWrapper(bcomos.NewDevice, logger),
-		"pc":       pc.NewDevice,
-		"ubiquiti": pc.NewDevice,
-		"airos":    pc.NewDevice,
-		"tplink":   pc.NewDevice,
-		"cambium":  pc.NewDevice,
-		"ros":      GenericCLIWrapper(ros.NewDevice, logger),
-		"ros_slow": GenericCLIWrapper(ros.NewSlowDevice, logger),
+		"juniper":    GenericCLIWrapper(juniper.NewDevice, logger),
+		"huawei":     GenericCLIWrapper(huawei.NewDevice, logger),
+		"smartax":    GenericCLIWrapper(huawei.NewSmartAXDevice, logger),
+		"h3c":        GenericCLIWrapper(h3c.NewDevice, logger),
+		"arista":     GenericCLIWrapper(arista.NewDevice, logger),
+		"cisco":      GenericCLIWrapper(cisco.NewDevice, logger),
+		"cisco_xr":   GenericCLIWrapper(cisco.NewXRDevice, logger),
+		"nxos":       GenericCLIWrapper(nxos.NewDevice, logger),
+		"bcomos":     GenericCLIWrapper(bcomos.NewDevice, logger),
+		"pc":         pc.NewDevice,
+		"ubiquiti":   pc.NewDevice,
+		"airos":      pc.NewDevice,
+		"tplink":     pc.NewDevice,
+		"cambium":    pc.NewDevice,
+		"ros":        GenericCLIWrapper(ros.NewDevice, logger),
+		"ros_slow":   GenericCLIWrapper(ros.NewSlowDevice, logger),
 		"ros_noecho": GenericCLIWrapper(ros.NewNoEchoDevice, logger),
-		"netconf":  netconf.BindDeviceOpts(netconf.NewDevice, netconf.WithLogger(logger)),
-		"aruos":    GenericCLIWrapper(aruos.NewDevice, logger),
-		"eltex":    GenericCLIWrapper(eltex.NewDevice, logger),
-		"asa":      GenericCLIWrapper(asa.NewDevice, logger),
-		"fsos":     GenericCLIWrapper(fsos.NewDevice, logger),
+		"netconf":    netconf.BindDeviceOpts(netconf.NewDevice, netconf.WithLogger(logger)),
+		"aruos":      GenericCLIWrapper(aruos.NewDevice, logger),
+		"eltex":      GenericCLIWrapper(eltex.NewDevice, logger),
+		"asa":        GenericCLIWrapper(asa.NewDevice, logger),
+		"fsos":       GenericCLIWrapper(fsos.NewDevice, logger),
 	}
 	return deviceMaps
 }

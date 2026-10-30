@@ -24,11 +24,14 @@ const (
 		`)`
 	passwordExpression      = `.*password:\s?$`
 	passwordErrorExpression = `\nPermission denied, please try again.(\r\n|\n)`
-	pagerExpression         = `\r\x1b\[K\r--More--\x1b\[K`
+	// Two pager styles: the classic MES 23xx/24xx "--More--" and the newer
+	// MES 3300/5300 (4.x firmware) "More: <space>, Quit: ... One line: <return>".
+	pagerExpression         = `(\r\x1b\[K\r--More--\x1b\[K|More: <space>, +Quit: q or CTRL\+Z, One line: <return>)`
 )
 
 var autoCommands = []cmd.Cmd{
-	cmd.NewCmd("set cli pagination off", cmd.WithErrorIgnore()),   //Eltex MES
+	cmd.NewCmd("set cli pagination off", cmd.WithErrorIgnore()), //Eltex MES 23xx/24xx
+	cmd.NewCmd("terminal datadump", cmd.WithErrorIgnore()),      //Eltex MES 3300/5300 (4.x): disable pager so output streams
 }
 
 func NewDevice(connector streamer.Connector, opts ...genericcli.GenericDeviceOption) genericcli.GenericDevice {

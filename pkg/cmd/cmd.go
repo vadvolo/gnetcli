@@ -265,6 +265,12 @@ func (m Answer) GetExpr() expr.Expr {
 	return res
 }
 
+// SessionPasswordSentinel, when used as an Answer's answer text, is replaced at
+// write time with the current session login password (see the genericcli exec
+// loop). Lets an auto-command like `enable` answer its Password: prompt with the
+// session password without baking the password into a device profile.
+const SessionPasswordSentinel = "\x00__GNETCLI_SESSION_PASSWORD__\x00"
+
 func NewAnswer(question, answer string, notSendNL bool) Answer {
 	return Answer{question: question, answer: answer, notSendNL: notSendNL}
 }

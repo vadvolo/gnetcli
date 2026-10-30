@@ -117,6 +117,7 @@ type GenericCLI struct {
 	sftpEnabled      bool
 	defaultAnswers   []cmd.Answer
 	terminalParams   *terminalParams
+	writeDelay       time.Duration
 	connectTimeout   time.Duration
 }
 
@@ -236,6 +237,12 @@ func WithTerminalParamsEcho(e bool) GenericCLIOption {
 	}
 }
 
+func WithWriteDelay(d time.Duration) GenericCLIOption {
+	return func(h *GenericCLI) {
+		h.writeDelay = d
+	}
+}
+
 func WithWriteNewLine(newline []byte) GenericCLIOption {
 	return func(h *GenericCLI) {
 		h.writeNewline = newline
@@ -328,6 +335,11 @@ func (m *GenericDevice) Connect(ctx context.Context) (err error) {
 		}
 	}
 
+	if m.cli.writeDelay > 0 {
+		if v, ok := m.connector.(interface{ SetWriteDelay(time.Duration) }); ok {
+			v.SetWriteDelay(m.cli.writeDelay)
+		}
+	}
 	err = m.connector.Init(ctx)
 	m.cliConnected = false
 	// We postpone CLI initialization to first Execute call because we don't have to do this for Download/Upload.
@@ -628,7 +640,7 @@ func GenericExecute(command cmd.Cmd, connector streamer.Connector, cli GenericCL
 	cbLimit := 100
 	seenEcho := false
 	pagerAnswered := false // Track if we just answered a pager
-	for { // pager loop
+	for {                  // pager loop
 		match, err := connector.ReadTo(ctx, exprs)
 		if err != nil {
 			var perr *streamer.ReadTimeoutException
@@ -738,12 +750,41 @@ func GenericExecute(command cmd.Cmd, connector streamer.Connector, cli GenericCL
 			logger.Debug("QuestionHandler question", zap.ByteString("question", question))
 			answer, err := command.QuestionHandler(question)
 			if err != nil {
-				if errors.Is(err, cmd.ErrNotFoundAnswer) {
+				if !errors.Is(err, cmd.ErrNotFoundAnswer) {
+					return nil, fmt.Errorf("QuestionHandler error %w", err)
+				}
+				// The command itself has no answer for this question; fall back to
+				// the device-level default answers (WithAnswers). Devices that set
+				// none keep the previous behaviour (throw). SmartAX uses this to
+				// confirm the "{ <cr>|... }:" parameter menu with an Enter.
+				found := false
+				for _, cmdAnswer := range cli.defaultAnswers {
+					ans, ok, aerr := cmdAnswer.Match(question)
+					if aerr != nil {
+						return nil, aerr
+					}
+					if ok {
+						answer = ans
+						found = true
+						break
+					}
+				}
+				if !found {
 					return nil, device.ThrowQuestionException(question)
 				}
-				return nil, fmt.Errorf("QuestionHandler error %w", err)
 			}
 			logger.Debug("QuestionHandler answer", zap.ByteString("answer", answer))
+			// Substitute the session-password sentinel with the real login password so
+			// an auto-command (e.g. `enable`) can answer its Password: prompt without
+			// the password being baked into the device profile.
+			if bytes.HasPrefix(answer, []byte(cmd.SessionPasswordSentinel)) {
+				tail := answer[len(cmd.SessionPasswordSentinel):]
+				pw := ""
+				if pws := connector.GetCredentials().GetPasswords(ctx); len(pws) > 0 {
+					pw = pws[0].Value()
+				}
+				answer = append([]byte(pw), tail...)
+			}
 			err = connector.Write(answer)
 			if err != nil {
 				return nil, fmt.Errorf("write error %w", err)

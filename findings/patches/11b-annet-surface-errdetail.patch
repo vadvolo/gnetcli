@@ -1,0 +1,73 @@
+diff --git a/internal/gnetcli/client.go b/internal/gnetcli/client.go
+index 9365fce..067b994 100644
+--- a/internal/gnetcli/client.go
++++ b/internal/gnetcli/client.go
+@@ -5,11 +5,14 @@ import (
+ 	"encoding/base64"
+ 	"fmt"
+ 	"log"
++	"strings"
+ 
+ 	proto "github.com/annetutil/gnetcli/pkg/server/proto"
++	errdetails "google.golang.org/genproto/googleapis/rpc/errdetails"
+ 	"google.golang.org/grpc"
+ 	"google.golang.org/grpc/credentials/insecure"
+ 	"google.golang.org/grpc/metadata"
++	"google.golang.org/grpc/status"
+ 
+ 	"annet-oil/internal/config"
+ )
+@@ -134,8 +137,9 @@ func (c *Client) ExecWithDevice(ctx context.Context, host, cmd, vendor, login, p
+ 		StringResult: true,
+ 	})
+ 	if err != nil {
+-		log.Printf("[gnetcli] ExecWithDevice failed: %v", err)
+-		return nil, fmt.Errorf("gnetcli exec failed: %w", err)
++		desc := describeGnetcliErr(err)
++		log.Printf("[gnetcli] ExecWithDevice failed: %s", desc)
++		return nil, fmt.Errorf("gnetcli exec failed: %s", desc)
+ 	}
+ 
+ 	log.Printf("[gnetcli] ExecWithDevice success, status=%d", res.Status)
+@@ -155,3 +159,41 @@ func (c *Client) ExecWithDevice(ctx context.Context, host, cmd, vendor, login, p
+ 		Status: res.Status,
+ 	}, nil
+ }
++
++// describeGnetcliErr turns gnetcli's opaque gRPC status ("generic_error" /
++// "connect_error") into a diagnosable string by pulling the ErrorInfo detail
++// (Reason + Metadata["err"], the real underlying cause) that the gnetcli server
++// attaches. The original code word is preserved as a substring so existing
++// Contains-based classification/retry (isRetryableCmdErr) keeps working, e.g.:
++//
++//	connect_error [handshake_error]: ssh: handshake failed: no common algorithm for key exchange
++//	connect_error [auth_error]: ... unable to authenticate, attempted methods [none password]
++//	generic_error [session_eof]: ... EOF
++func describeGnetcliErr(err error) string {
++	st, ok := status.FromError(err)
++	if !ok {
++		return err.Error()
++	}
++	code := st.Message() // generic_error | connect_error
++	var reason, detail string
++	for _, d := range st.Details() {
++		if info, ok := d.(*errdetails.ErrorInfo); ok {
++			reason = info.GetReason()
++			if m := info.GetMetadata(); m != nil {
++				detail = m["err"]
++			}
++			break
++		}
++	}
++	out := code
++	if reason != "" && reason != code {
++		out += " [" + reason + "]"
++	}
++	if detail != "" {
++		if i := strings.IndexAny(detail, "\r\n"); i >= 0 {
++			detail = detail[:i]
++		}
++		out += ": " + detail
++	}
++	return out
++}
